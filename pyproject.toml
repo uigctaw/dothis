@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "dothis"
+version = "0.1.0"
+description = ""
+authors = ["uigctaw <uigctaw@metadata.social>"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.1.1"
+ruff = "^0.3.4"
+mypy = "^1.9.0"
+
+
+[tool.ruff]
+line_length = 79
+select = ["ALL"]
+ignore = [
+]
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.pylint.messages_control]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "too-few-public-methods",
+    "duplicate-code",
+    "use-dict-literal",
+]
