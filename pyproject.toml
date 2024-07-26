@@ -17,23 +17,23 @@ mypy = "^1.9.0"
 
 
 [tool.ruff]
-line_length = 79
+target-version = "py311"
+line-length = 79
+
+[tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+    "ANN",  # flake8-annotations
+    "C408",  # unnecessary-collection-call
+    "D10",  # undocumented-*
+    "D203",  # "1 blank line required before class docstring"
+    "D213",  # "Multi-line docstring summary should start at the second line"
+    "RET504",  # unnecessary-assign
+    "RET505",  # superfluous-else-return
+    "S101",  # assert
 ]
 
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-
-[tool.pylint.messages_control]
-disable = [
-    "missing-module-docstring",
-    "missing-class-docstring",
-    "missing-function-docstring",
-    "too-few-public-methods",
-    "duplicate-code",
-    "use-dict-literal",
-]

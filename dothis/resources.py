@@ -1,158 +1,138 @@
-from collections import defaultdict
-from dataclasses import dataclass
-from typing import Iterable, Protocol
-import json
+import enum
+from typing import Protocol
 
-from .api import ExistingResource, InfraMaker, ResourceToBeCreated
+from .api import ExistingResource, ResourcePoller, ResourceToBeCreated
+
+
+class HTTPCode(enum.IntEnum):
+    OK = 200
+    CREATED = 201
+    ACCEPTED = 202
+    NO_CONTENT = 204
 
 
 class Resource(Protocol):
-
     def get_existing_resources(self):
         pass
 
     def create_resource(self, resource, /):
         pass
 
-    def categorize(
-            self,
-            *,
-            required_resource_spec,
-            existing_resource_specs,
-    ):
+    def categorize(self, *, required_resource_spec, existing_resource_specs):
         pass
 
     def delete_resources(self, resources, /):
         pass
 
 
-class Poller:
-
-    def __init__(self, fn, **kwargs):
-        self._fn = fn
-        self._kwargs = kwargs
-
-    def poll(self):
-        return self._fn(**self._kwargs)
-
-
 class Droplets:
+    _ENDPOINT = "droplets"
 
-    _ENDPOINT = 'droplets'
-
-    def __init__(self, *, tag_name, do_api):
+    def __init__(self, do_api, *, tag_name):
         self._tag_name = tag_name
         self._do_api = do_api
 
     def get_existing_resources(self):
-        return self._do_api.get(
-                endpoint=self._ENDPOINT,
-                params=dict(tag_name=self._tag_name),
-        ).data['droplets']
+        ret = self._do_api.get(
+            endpoint=self._ENDPOINT, params=dict(tag_name=self._tag_name),
+        ).data["droplets"]
+        return ret
 
-    def create_resource(self, spec, /):
-        endpoint = self._ENDPOINT
+    def create_resource(self, *, name, size, image, **other):
         response = self._do_api.post(
-            endpoint=endpoint,
-            data=spec,
+                endpoint=self._ENDPOINT,
+                name=name,
+                size=size,
+                image=image,
+                **other,
         )
-        assert response.code == 202
-        droplet_id = response.data['droplet']['id']
-        action_id = response.data['actions']['id']
+        assert response.code == HTTPCode.ACCEPTED
+        droplet_id = response.data["droplet"]["id"]
+        action_id = next(
+                action
+                for action in response.data["links"]["actions"]
+                if action["rel"] == "create"
+        )["id"]
 
-        poller = Poller(
-                self._get_created_droplet,
-                endpoint=endpoint,
-                droplet_id=droplet_id,
-                action_id=action_id,
-                do_api=self._do_api,
+        poller = ResourcePoller(
+            self._get_created_droplet,
+            endpoint=self._ENDPOINT,
+            droplet_id=droplet_id,
+            action_id=action_id,
+            do_api=self._do_api,
         )
         if response := poller.poll():
             return response
         return poller
 
-
     @staticmethod
-    def _get_created_droplet(
-            *,
-            endpoint,
-            droplet_id,
-            action_id,
-            do_api,
-    ):
+    def _get_created_droplet(*, endpoint, droplet_id, action_id, do_api):
         response = do_api.get(
-            endpoint=f'{endpoint}/{droplet_id}/actions/{action_id}'
+            endpoint=f"{endpoint}/{droplet_id}/actions/{action_id}",
         )
-        if response.code == 200:
-            if response.data['status'] == 'completed':
-                response = do_api.get(
-                    endpoint=f'{endpoint}/{droplet_id}'
-                )
-                if response.code == 200:
-                    return response.data['droplet']
+        if (
+            response.code == HTTPCode.OK
+            and response.data["action"]["status"] == "completed"
+        ):
+            response = do_api.get(endpoint=f"{endpoint}/{droplet_id}")
+            if response.code == HTTPCode.OK:
+                return response.data["droplet"]
+        return None
 
-    def categorize(
-            self,
-            *,
-            required_resource_spec,
-            existing_resource_specs,
-    ):
-        found_index = None
-        for i, existing_resource_spec in enumerate(existing_resource_specs):
-            if (
-                    existing_resource_spec['name']
-                    != required_resource_spec['name']
-            ):
-                break
-            else:
-                found_index = i
-            if found_index is not None:
-                break
-
-        if found_index is None:
-            return ResourceToBeCreated(
-                creation_spec=required_resource_spec,
-                remaining_existing_resource_specs=existing_resource_specs,
-            )
-        return ExistingResource(
-            spec=existing_resources_spec[found_index],
-            remaining_existing_resource_specs=(
-                existing_resource_specs[:found_index]
-                + existing_resource_specs[found_index + 1:]
-            ),
-        )
+    def categorize(self, *, required_resource_spec, existing_resource_specs):
+        return _spec_subset_exists(
+                required_resource_spec, existing_specs=existing_resource_specs)
 
     def delete_resources(self, specs, /):
         for spec in specs:
             endpoint = f"{self._ENDPOINT}/{spec['id']}"
             response = self._do_api.delete(endpoint=endpoint)
-            assert response.code == 204
+            assert response.code == HTTPCode.NO_CONTENT
 
 
 class VPCs:
+    _ENDPOINT = "vpcs"
 
-    _ENDPOINT = 'vpcs'
-
-    def __init__(self, *, do_api):
+    def __init__(self, do_api):
         self._do_api = do_api
 
     def get_existing_resources(self):
-        return []
+        return self._do_api.get(endpoint=self._ENDPOINT).data["vpcs"]
 
     def categorize(self, *, required_resource_spec, existing_resource_specs):
-        assert not existing_resource_specs
-        return ResourceToBeCreated(
-                creation_spec=required_resource_spec,
-                remaining_existing_resource_specs=existing_resource_specs,
-        )
+        return _spec_subset_exists(
+                required_resource_spec, existing_specs=existing_resource_specs)
 
-    def create_resource(self, spec, /):
+    def create_resource(self, *, name, region, **other):
         response = self._do_api.post(
-            endpoint=self._ENDPOINT,
-            data=spec,
+                endpoint=self._ENDPOINT,
+                name=name,
+                region=region,
+                **other,
         )
-        assert response.code == 201
+        assert response.code == HTTPCode.CREATED, response.code
         return response.data
 
-    def delete_resources(self, specs, /):
-        1/0
+    def delete_resources(self, resources, /):
+        pass
+
+
+def _spec_subset_exists(required_spec, *, existing_specs):
+    required = required_spec.materialize()
+    for i, existing in enumerate(existing_specs):
+        if _is_dict_subset(sub=required, super_=existing):
+            return ExistingResource(
+                spec=existing,
+                remaining_existing_resource_specs=(
+                    existing_specs[:i] + existing_specs[i + 1:]
+                ),
+            )
+
+    return ResourceToBeCreated(
+        creation_spec=required_spec,
+        remaining_existing_resource_specs=existing_specs,
+    )
+
+
+def _is_dict_subset(*, sub, super_):
+    return all(v == super_.get(k) for k, v in sub.items())
