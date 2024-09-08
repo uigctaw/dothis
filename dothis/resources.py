@@ -1,8 +1,7 @@
+import abc
 import enum
 import time
-from typing import Protocol
-
-from .api import ExistingResource, ResourceToBeCreated
+from dataclasses import dataclass
 
 
 class HTTPCode(enum.IntEnum):
@@ -12,35 +11,82 @@ class HTTPCode(enum.IntEnum):
     NO_CONTENT = 204
 
 
-class Resource(Protocol):
-    def get_existing_resources(self):
-        pass
-
-    def create_resource(self, resource, /):
-        pass
-
-    def categorize(self, *, required_resource_spec, existing_resource_specs):
-        pass
-
-    def delete_resources(self, resources, /):
-        pass
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ResourceToBeCreated:
+    creation_spec: dict
+    remaining_existing_resource_specs: list
 
 
-class Droplets:
-    _ENDPOINT = "droplets"
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ExistingResource:
+    spec: dict
+    remaining_existing_resource_specs: list
 
-    def __init__(self, do_api, *, tag_name, time_=None):
-        self._tag_name = tag_name
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RequiredResource:
+    creation_spec: dict
+    builder: type
+
+
+class Resource(abc.ABC):
+
+    def __init__(self, do_api, *, time_=None):
         self._do_api = do_api
         self._time = time_ or time
+        self._remaining_existing_resources: list
 
-    def get_existing_resources(self):
+    def __enter__(self):
+        self._remaining_existing_resources = self._get_existing_resources()
+        return self
+
+    def __exit__(self, *_):
+        self._delete_resources(self._remaining_existing_resources)
+
+    def __call__(self, **required_spec):
+        categorized = self._categorize(
+                required_resource_spec=required_spec,
+                existing_resource_specs=self._remaining_existing_resources,
+        )
+        self._remaining_existing_resources = (
+                categorized.remaining_existing_resource_specs)
+
+        if isinstance(categorized, ExistingResource):
+            return categorized.spec
+
+        return self._create_resource(**categorized.creation_spec)
+
+    @abc.abstractmethod
+    def _get_existing_resources(self):
+        pass
+
+    @abc.abstractmethod
+    def _create_resource(self, **creation_spec):
+        pass
+
+    @abc.abstractmethod
+    def _categorize(self, *, required_resource_spec, existing_resource_specs):
+        pass
+
+    @abc.abstractmethod
+    def _delete_resources(self, resources, /):
+        pass
+
+
+class Droplets(Resource):
+    _ENDPOINT = "droplets"
+
+    def __init__(self, *args, tag_name, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tag_name = tag_name
+
+    def _get_existing_resources(self):
         ret = self._do_api.get(
             endpoint=self._ENDPOINT, params=dict(tag_name=self._tag_name),
         ).data["droplets"]
         return ret
 
-    def create_resource(self, *, name, size, image, **other):
+    def _create_resource(self, *, name, size, image, **other):
         response = self._do_api.post(
                 endpoint=self._ENDPOINT,
                 name=name,
@@ -85,31 +131,28 @@ class Droplets:
                 return response.data["droplet"]
         return None
 
-    def categorize(self, *, required_resource_spec, existing_resource_specs):
+    def _categorize(self, *, required_resource_spec, existing_resource_specs):
         return _spec_subset_exists(
                 required_resource_spec, existing_specs=existing_resource_specs)
 
-    def delete_resources(self, specs, /):
+    def _delete_resources(self, specs, /):
         for spec in specs:
             endpoint = f"{self._ENDPOINT}/{spec['id']}"
             response = self._do_api.delete(endpoint=endpoint)
             assert response.code == HTTPCode.NO_CONTENT
 
 
-class VPCs:
+class VPCs(Resource):
     _ENDPOINT = "vpcs"
 
-    def __init__(self, do_api):
-        self._do_api = do_api
-
-    def get_existing_resources(self):
+    def _get_existing_resources(self):
         return self._do_api.get(endpoint=self._ENDPOINT).data["vpcs"]
 
-    def categorize(self, *, required_resource_spec, existing_resource_specs):
+    def _categorize(self, *, required_resource_spec, existing_resource_specs):
         return _spec_subset_exists(
                 required_resource_spec, existing_specs=existing_resource_specs)
 
-    def create_resource(self, *, name, region, **other):
+    def _create_resource(self, *, name, region, **other):
         response = self._do_api.post(
                 endpoint=self._ENDPOINT,
                 name=name,
@@ -119,14 +162,13 @@ class VPCs:
         assert response.code == HTTPCode.CREATED, response.code
         return response.data
 
-    def delete_resources(self, resources, /):
+    def _delete_resources(self, resources, /):
         pass
 
 
 def _spec_subset_exists(required_spec, *, existing_specs):
-    required = required_spec.materialize()
     for i, existing in enumerate(existing_specs):
-        if _is_dict_subset(sub=required, super_=existing):
+        if _is_dict_subset(sub=required_spec, super_=existing):
             return ExistingResource(
                 spec=existing,
                 remaining_existing_resource_specs=(
