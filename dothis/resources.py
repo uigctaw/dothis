@@ -1,7 +1,8 @@
 import enum
+import time
 from typing import Protocol
 
-from .api import ExistingResource, ResourcePoller, ResourceToBeCreated
+from .api import ExistingResource, ResourceToBeCreated
 
 
 class HTTPCode(enum.IntEnum):
@@ -28,9 +29,10 @@ class Resource(Protocol):
 class Droplets:
     _ENDPOINT = "droplets"
 
-    def __init__(self, do_api, *, tag_name):
+    def __init__(self, do_api, *, tag_name, time_=None):
         self._tag_name = tag_name
         self._do_api = do_api
+        self._time = time_ or time
 
     def get_existing_resources(self):
         ret = self._do_api.get(
@@ -54,16 +56,20 @@ class Droplets:
                 if action["rel"] == "create"
         )["id"]
 
-        poller = ResourcePoller(
-            self._get_created_droplet,
-            endpoint=self._ENDPOINT,
-            droplet_id=droplet_id,
-            action_id=action_id,
-            do_api=self._do_api,
-        )
-        if response := poller.poll():
-            return response
-        return poller
+        sleep_s = 1.0
+        backoff_factor = 1.5
+        max_number_of_tries = 10
+        for _ in range(max_number_of_tries):
+            if response := self._get_created_droplet(
+                endpoint=self._ENDPOINT,
+                droplet_id=droplet_id,
+                action_id=action_id,
+                do_api=self._do_api,
+            ):
+                return response
+            self._time.sleep(sleep_s)
+            sleep_s *= backoff_factor
+        return 1/0
 
     @staticmethod
     def _get_created_droplet(*, endpoint, droplet_id, action_id, do_api):

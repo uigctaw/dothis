@@ -147,7 +147,7 @@ class FutureReference:
     def materialize(self):
         materialized = self.future[self.item]
         if isinstance(materialized, FutureReference):
-            raise FutureIsNotNowError()
+            raise FutureIsNotNowError
         return materialized
 
     def __add__(self, other):
@@ -175,15 +175,6 @@ class ResourceToBeCreated:
 class ExistingResource:
     spec: dict
     remaining_existing_resource_specs: list
-
-
-class ResourcePoller:
-    def __init__(self, fn, **kwargs):
-        self._fn = fn
-        self._kwargs = kwargs
-
-    def poll(self):
-        return self._fn(**self._kwargs)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -230,7 +221,6 @@ class InfraMaker:
             remaining_existing_resources = self._get_existing_resources(
                 self._builders,
             )
-            pollers = []
 
             for required_resource in self._required_resources:
                 builder = required_resource.builder
@@ -243,21 +233,9 @@ class InfraMaker:
                 remaining_existing_resources[builder] = (
                     categorized.remaining_existing_resource_specs
                 )
-                spec_or_poller = self._get_spec_or_poller(
+                spec = self._get_spec(
                         categorized, builder=builder)
-                if isinstance(spec_or_poller, ResourcePoller):
-                    pollers.append((required_resource, spec_or_poller))
-                else:
-                    required_resource.future.populate(spec_or_poller)
-    
-            while pollers:
-                remaining_pollers = []
-                for resource, poller in pollers:
-                    if spec := poller.poll():
-                        resource.future.populate(spec)
-                    else:
-                        remaining_pollers.append((resource, poller))
-                pollers = remaining_pollers
+                required_resource.future.populate(spec)
 
             for (
                 builder,
@@ -265,11 +243,10 @@ class InfraMaker:
             ) in remaining_existing_resources.items():
                 builder.delete_resources(resources_to_delete)
 
-    def _get_spec_or_poller(self, categorized_resource, *, builder):
+    def _get_spec(self, categorized_resource, *, builder):
         if isinstance(categorized_resource, ResourceToBeCreated):
             creation_spec = categorized_resource.creation_spec.materialize()
-            spec_or_poller = builder.create_resource(**creation_spec)
-            return spec_or_poller
+            return builder.create_resource(**creation_spec)
         else:
             return categorized_resource.spec
 

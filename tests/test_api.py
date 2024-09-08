@@ -2,7 +2,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from dothis.api import DigitalOcean, FutureReference, InfraMaker
+from dothis.api import DigitalOcean, InfraMaker
 from dothis.resources import Droplets, VPCs
 from tests.fakes import GARGANTUAN, ILLEGAL_SIZE, FakeURLOpener
 
@@ -118,15 +118,20 @@ def test_long_creation_is_ok():
     fake_url_opener = FakeURLOpener()
     do_api = DigitalOcean(token=None, open_url=fake_url_opener)
 
-    with (  # noqa: PT012
-            pytest.raises(HTTPError, match=ILLEGAL_SIZE),
-            InfraMaker() as infra_maker,
-    ):
-        droplets = infra_maker(Droplets(do_api, tag_name="greetings"))
+    class FakeTime:
+
+        def sleep(self, seconds):
+            pass
+
+    with InfraMaker() as infra_maker:
+        droplets = infra_maker(Droplets(
+            do_api,
+            tag_name="greetings",
+            time_=FakeTime(),
+        ))
 
         drop1 = droplets(name="hello", image="bar", size=GARGANTUAN)
         drop2 = droplets(
                 name=drop1["name"] + " there", image="bar", size="nvm")
-        assert isinstance(drop1["name"], FutureReference)
 
     assert drop2["name"] == "hello there"
