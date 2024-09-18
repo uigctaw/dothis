@@ -90,10 +90,12 @@ class DropletsProcessor(Processor):
             return FakeResponse(code=422)
         self._droplets[droplet_id] = dict(
             name=request_data["name"],
+            region=dict(slug=request_data["region"]),
             action_id=action_id,
             vpc_uuid=request_data.get("vpc_uuid", uuid.uuid4().int),
             id=droplet_id,
-            size=request_data["size"],
+            size_slug=request_data["size"],
+            image=dict(slug=request_data["image"]),
         )
         return FakeResponse(
             code=202,
@@ -108,7 +110,7 @@ class DropletsProcessor(Processor):
             droplet = self._droplets[url.droplet_id]
             if url.action_id:
                 assert url.action_id == droplet["action_id"]
-                if droplet["size"] == GARGANTUAN:
+                if droplet["size_slug"] == GARGANTUAN:
                     self._creation_progress[url.droplet_id] += 1
                     if self._creation_progress[url.droplet_id] <= 1:
                         return FakeResponse(
@@ -129,20 +131,23 @@ class DropletsProcessor(Processor):
                 return FakeResponse(
                     code=200,
                     data=dict(
-                        droplet=dict(
-                            name=droplet["name"], vpc_uuid=droplet["vpc_uuid"],
-                        ),
+                        droplet=self._without_action(droplet),
                     ),
                 )
         return FakeResponse(
             code=200,
             data=dict(
                 droplets=[
-                    dict(name=droplet["name"], id=droplet["id"])
+                    self._without_action(droplet)
                     for droplet in self._droplets.values()
                 ],
             ),
         )
+
+    def _without_action(self, droplet):
+        without_action = droplet.copy()
+        del without_action["action_id"]
+        return without_action
 
     def _process_delete(self, url):
         del self._droplets[url.droplet_id]
@@ -151,25 +156,36 @@ class DropletsProcessor(Processor):
 
 class VPCsProcessor(Processor):
     def __init__(self):
-        self._vpcs = {}
         self._vpc_ids = _iter_increasing_random_ints()
+        self._vpcs = {
+            (id_ := next(self._vpc_ids)):
+                dict(
+                    id=id_,
+                    name="__DEFAULT_VPC__",
+                    default=True,
+                    region="__EVERYWHERE__",
+                    ip_range="0.0.0.0/0",
+                ),
+        }
 
     def process(self, request):
         if request.method == "POST":
             details = json.loads(request.data)
-            name = details["name"]
-            if name in self._vpcs:
-                return FakeResponse(code=422)
+            details["id"] = next(self._vpc_ids)
+            details["ip_range"] = details.get(
+                "ip_range", "1337.1337.1337.1337/32")
+            details["default"] = False
+            self._vpcs[details["id"]] = details
 
-            self._vpcs[name] = details
-
-            return FakeResponse(
-                code=201, data=details | dict(id=next(self._vpc_ids)),
-            )
+            return FakeResponse(code=201, data=details)
         if request.method == "GET":
             return FakeResponse(
                     code=200, data=dict(vpcs=list(self._vpcs.values())))
-
+        if request.method == "DELETE":
+            id_, = map(int, request.full_url.rsplit("/", maxsplit=1)[-1:])
+            assert not self._vpcs[id_]["default"]
+            del self._vpcs[id_]
+            return FakeResponse(code=204)
         raise DoNotKnowHowToProcessRequestError(request)
 
     def get_number_of_vpcs(self):
@@ -198,7 +214,7 @@ class FakeDigitalOcean:
 
 
 class FakeResponse:
-    def __init__(self, *, data=None, code):
+    def __init__(self, *, data="", code):
         self._data = data
         self._code = code
 
@@ -227,4 +243,3 @@ class FakeURLOpener:
                     hdrs=None,  # type: ignore[arg-type]
                     fp=io.BytesIO(json.dumps(dict(no="thanks")).encode()),
             )
-
