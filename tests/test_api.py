@@ -10,7 +10,7 @@ from tests.fakes import GARGANTUAN, ILLEGAL_SIZE, FakeURLOpener
 def test_create_one_droplet():
     do_api = DigitalOcean(token=None, open_url=FakeURLOpener())
 
-    with Droplets(tag_name="my_droplet", do_api=do_api) as droplets:
+    with Droplets(tag="my_droplet", do_api=do_api) as droplets:
         droplet = droplets(name="test_droplet", image="foo", size="bar")
 
     assert droplet["name"] == "test_droplet"
@@ -21,7 +21,7 @@ def test_create_droplet_in_vpc():
 
     with (
             VPCs(do_api=do_api) as vpcs,
-            Droplets(tag_name="my_droplet", do_api=do_api) as droplets,
+            Droplets(tag="my_droplet", do_api=do_api) as droplets,
     ):
         vpc = vpcs(name="my_vpc", region="over yonder")
         droplet = droplets(
@@ -41,7 +41,7 @@ def test_complex_dependencies_are_respected():
 
     with (
         VPCs(do_api=do_api) as vpcs,
-        Droplets(tag_name="my_droplet", do_api=do_api) as droplets,
+        Droplets(tag="my_droplet", do_api=do_api) as droplets,
     ):
         drop1 = droplets(name="d1", **kws)
         vpc1 = vpcs(name=drop1["name"] + "_v1", region="here")
@@ -59,7 +59,7 @@ def test_creating_the_same_resource_twice():
 
     kws = dict(size="foo", image="bar")
 
-    with Droplets(tag_name="my_droplet", do_api=do_api) as droplets:
+    with Droplets(tag="my_droplet", do_api=do_api) as droplets:
         droplets(name="d1", **kws)
         drop = droplets(name="d1", **kws)
 
@@ -70,15 +70,20 @@ def test_deleting_a_resource():
     fake_url_opener = FakeURLOpener()
     do_api = DigitalOcean(token=None, open_url=fake_url_opener)
 
-    with Droplets(tag_name="my_droplet", do_api=do_api) as droplets:
-        droplets(name="d1", size="foo", image="bar")
+    with Droplets(tag="my_droplet", do_api=do_api) as droplets:
+        drop1a = droplets(name="d1", size="foo1", image="bar1")
+        droplets(name="d2", size="foo2", image="bar2")
 
-    assert fake_url_opener.do.get_number_of_droplets() == 1
+    assert fake_url_opener.do.get_number_of_droplets() == 2
 
-    with Droplets(tag_name="my_droplet", do_api=do_api):
-        pass
+    with Droplets(tag="my_droplet", do_api=do_api) as droplets:
+        drop1b = droplets(name="d1", size="foo1", image="bar1")
+        # 2nd droplet is deleted
+        droplets(name="d3", size="foo3", image="bar3")
+        droplets(name="d4", size="foo4", image="bar4")
 
-    assert fake_url_opener.do.get_number_of_droplets() == 0
+    assert fake_url_opener.do.get_number_of_droplets() == 3
+    assert drop1a["id"] == drop1b["id"]
 
 
 def test_create_1_vpc_and_1_droplet_with_rerun():
@@ -88,7 +93,7 @@ def test_create_1_vpc_and_1_droplet_with_rerun():
     for _ in range(2):
         with (
             VPCs(do_api) as vpcs,
-            Droplets(do_api, tag_name="greetings") as droplets,
+            Droplets(do_api, tag="greetings") as droplets,
         ):
             vpcs(name="acoin", region="hi")
             droplets(name="main", image="bar", size="foo")
@@ -102,7 +107,7 @@ def test_unprocessable_entity_gives_a_meaninful_error():
     do_api = DigitalOcean(token=None, open_url=fake_url_opener)
 
     with pytest.raises(HTTPError, match=ILLEGAL_SIZE):  # noqa: SIM117
-        with Droplets(do_api, tag_name="greetings") as droplets:
+        with Droplets(do_api, tag="greetings") as droplets:
             droplets(name="hi", image="bar", size=ILLEGAL_SIZE)
 
 
@@ -115,7 +120,7 @@ def test_long_creation_is_ok():
         def sleep(self, seconds):
             pass
 
-    with Droplets(do_api, tag_name="greetings", time_=FakeTime()) as droplets:
+    with Droplets(do_api, tag="greetings", time_=FakeTime()) as droplets:
         drop1 = droplets(name="hello", image="bar", size=GARGANTUAN)
         drop2 = droplets(
                 name=drop1["name"] + " there", image="bar", size="nvm")

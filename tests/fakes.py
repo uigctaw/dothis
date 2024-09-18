@@ -93,7 +93,8 @@ class DropletsProcessor(Processor):
             action_id=action_id,
             vpc_uuid=request_data.get("vpc_uuid", uuid.uuid4().int),
             id=droplet_id,
-            size=request_data["size"],
+            slab_size=request_data["size"],
+            image=dict(name=request_data["image"]),
         )
         return FakeResponse(
             code=202,
@@ -108,7 +109,7 @@ class DropletsProcessor(Processor):
             droplet = self._droplets[url.droplet_id]
             if url.action_id:
                 assert url.action_id == droplet["action_id"]
-                if droplet["size"] == GARGANTUAN:
+                if droplet["slab_size"] == GARGANTUAN:
                     self._creation_progress[url.droplet_id] += 1
                     if self._creation_progress[url.droplet_id] <= 1:
                         return FakeResponse(
@@ -129,20 +130,23 @@ class DropletsProcessor(Processor):
                 return FakeResponse(
                     code=200,
                     data=dict(
-                        droplet=dict(
-                            name=droplet["name"], vpc_uuid=droplet["vpc_uuid"],
-                        ),
+                        droplet=self._without_action(droplet),
                     ),
                 )
         return FakeResponse(
             code=200,
             data=dict(
                 droplets=[
-                    dict(name=droplet["name"], id=droplet["id"])
+                    self._without_action(droplet)
                     for droplet in self._droplets.values()
                 ],
             ),
         )
+
+    def _without_action(self, droplet):
+        without_action = droplet.copy()
+        del without_action["action_id"]
+        return without_action
 
     def _process_delete(self, url):
         del self._droplets[url.droplet_id]
@@ -160,16 +164,16 @@ class VPCsProcessor(Processor):
             name = details["name"]
             if name in self._vpcs:
                 return FakeResponse(code=422)
+            details["id"] = next(self._vpc_ids)
 
             self._vpcs[name] = details
 
-            return FakeResponse(
-                code=201, data=details | dict(id=next(self._vpc_ids)),
-            )
+            return FakeResponse(code=201, data=details)
         if request.method == "GET":
             return FakeResponse(
                     code=200, data=dict(vpcs=list(self._vpcs.values())))
-
+        if request.method == "DELETE":
+            return FakeResponse(code=204)
         raise DoNotKnowHowToProcessRequestError(request)
 
     def get_number_of_vpcs(self):
@@ -227,4 +231,3 @@ class FakeURLOpener:
                     hdrs=None,  # type: ignore[arg-type]
                     fp=io.BytesIO(json.dumps(dict(no="thanks")).encode()),
             )
-

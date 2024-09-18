@@ -28,6 +28,7 @@ ignore = [
     "D10",  # undocumented-*
     "D203",  # "1 blank line required before class docstring"
     "D213",  # "Multi-line docstring summary should start at the second line"
+    "PLR2004",  # magic-value-comparison
     "RET504",  # unnecessary-assign
     "RET505",  # superfluous-else-return
     "S101",  # assert
