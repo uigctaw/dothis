@@ -29,7 +29,7 @@ class _OpenURL(typing.Protocol):
 @dataclass(frozen=True, kw_only=True, slots=True)
 class _Response:
     code: int
-    data: dict
+    data: dict | None
 
 
 class DigitalOcean:
@@ -65,8 +65,10 @@ class DigitalOcean:
         )
         try:
             with self._open_url(request) as response:
+                raw_data = response.read()
                 return _Response(
-                    data=json.loads(response.read()), code=response.code,
+                    data=json.loads(raw_data) if raw_data else None,
+                    code=response.code,
                 )
         except HTTPError as exc:
             request_data = json.loads(request.data)  # type: ignore[arg-type]

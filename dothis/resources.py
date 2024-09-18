@@ -36,9 +36,17 @@ class Resource(abc.ABC):
     def __init__(self, do_api, *, time_=None, logger=None):
         self._do_api = do_api
         self._time = time_ or time
-        self._logger = logger or logging.getLogger(type(self).__name__)
-
+        if logger is None:
+            logger = self._get_default_logger()
+        self._logger = logger
         self._remaining_existing_resources: list
+
+    def _get_default_logger(self):
+        logger = logging.getLogger(type(self).__name__)
+        handler = logging.StreamHandler()
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        return logger
 
     def __enter__(self):
         existing_resources = self._get_existing_resources()
@@ -138,13 +146,14 @@ class Droplets(Resource):
         ).data["droplets"]
         return ret
 
-    def _create_resource(self, *, name, size, image, **other):
+    def _create_resource(self, *, name, size, image, region, **other):
         tags = [*other.pop("tags", []), self._tag]
         response = self._do_api.post(
                 endpoint=self._ENDPOINT,
                 name=name,
                 size=size,
                 image=image,
+                region=region,
                 tags=tags,
                 **other,
         )
@@ -189,8 +198,9 @@ class Droplets(Resource):
     def _are_specs_equal(
             self, *, required_resource_spec, existing_resource_spec):
         required = required_resource_spec.copy()
-        required["image"] = dict(name=required.pop("image"))
-        required["slab_size"] = required.pop("size")
+        required["image"] = dict(slug=required.pop("image"))
+        required["size_slug"] = required.pop("size")
+        required["region"] = dict(slug=required.pop("region"))
         return _is_dict_subset(sub=required, super_=existing_resource_spec)
 
     def _delete_resources(self, specs, /):
@@ -200,7 +210,16 @@ class Droplets(Resource):
             assert response.code == HTTPCode.NO_CONTENT
 
     def _format_existing_resources(self, specs):
-        return pprint.pformat(specs)
+        return pprint.pformat([
+            {
+                "name": spec["name"],
+                "region": spec["region"]["slug"],
+                "image": spec["image"]["slug"],
+                "size": spec["size_slug"],
+                "vpc_uuid": spec["vpc_uuid"],
+            }
+            for spec in specs
+        ])
 
 
 class VPCs(Resource):
@@ -226,13 +245,29 @@ class VPCs(Resource):
 
     def _delete_resources(self, resources, /):
         for spec in resources:
+            if spec["default"]:
+                continue
             endpoint = f"{self._ENDPOINT}/{spec['id']}"
             response = self._do_api.delete(endpoint=endpoint)
             assert response.code == HTTPCode.NO_CONTENT
 
     def _format_existing_resources(self, specs):
-        return pprint.pformat(specs)
+        return pprint.pformat([
+            {
+                "name": spec["name"],
+                "region": spec["region"],
+                "id": spec["id"],
+                "ip_range": spec["ip_range"],
+                "default": spec["default"],
+            }
+            for spec in specs
+        ])
 
 
 def _is_dict_subset(*, sub, super_):
-    return all(v == super_.get(k) for k, v in sub.items())
+    return all(
+        _is_dict_subset(sub=v, super_=super_v)
+        if isinstance(v, dict) and isinstance(super_v := super_.get(k), dict)
+        else v == super_.get(k)
+        for k, v in sub.items()
+    )
