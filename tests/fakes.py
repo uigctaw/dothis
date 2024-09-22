@@ -154,14 +154,14 @@ class DropletsProcessor(Processor):
         return FakeResponse(code=204)
 
 
-class VPCsProcessor(Processor):
+class VpcsProcessor(Processor):
     def __init__(self):
         self._vpc_ids = _iter_increasing_random_ints()
         self._vpcs = {
             (id_ := next(self._vpc_ids)):
                 dict(
                     id=id_,
-                    name="__DEFAULT_VPC__",
+                    name="__DEFAULT_Vpc__",
                     default=True,
                     region="__EVERYWHERE__",
                     ip_range="0.0.0.0/0",
@@ -195,7 +195,7 @@ class VPCsProcessor(Processor):
 class FakeDigitalOcean:
     def __init__(self):
         self._droplets_processor = DropletsProcessor()
-        self._vpcs_processor = VPCsProcessor()
+        self._vpcs_processor = VpcsProcessor()
 
     def process_request(self, request):
         (endpoint,) = re.match(  # type: ignore[union-attr]
