@@ -1,9 +1,10 @@
+import contextlib
 from urllib.error import HTTPError
 
 import pytest
 
 from dothis.api import DigitalOcean
-from dothis.resources import Droplets, VPCs
+from dothis.resources import Droplets, Vpcs
 from tests.fakes import GARGANTUAN, ILLEGAL_SIZE, FakeURLOpener
 
 
@@ -21,7 +22,7 @@ def test_create_droplet_in_vpc():
     do_api = DigitalOcean(token=None, open_url=FakeURLOpener())
 
     with (
-            VPCs(do_api=do_api) as vpcs,
+            Vpcs(do_api=do_api) as vpcs,
             Droplets(tag="my_droplet", do_api=do_api) as droplets,
     ):
         vpc = vpcs(name="my_vpc", region="over yonder")
@@ -42,7 +43,7 @@ def test_complex_dependencies_are_respected():
     kws = dict(size="medium", image="bsd", region="Moria")
 
     with (
-        VPCs(do_api=do_api) as vpcs,
+        Vpcs(do_api=do_api) as vpcs,
         Droplets(tag="my_droplet", do_api=do_api) as droplets,
     ):
         drop1 = droplets(name="d1", **kws)
@@ -94,7 +95,7 @@ def test_create_1_vpc_and_1_droplet_with_rerun():
 
     for _ in range(2):
         with (
-            VPCs(do_api) as vpcs,
+            Vpcs(do_api) as vpcs,
             Droplets(do_api, tag="greetings") as droplets,
         ):
             vpcs(name="acoin", region="hi")
@@ -133,3 +134,28 @@ def test_long_creation_is_ok():
         )
 
     assert drop2["name"] == "hello there"
+
+
+def test_do_not_delete_resources_after_error():
+    fake_url_opener = FakeURLOpener()
+    do_api = DigitalOcean(token=None, open_url=fake_url_opener)
+
+    class SomeError(Exception):
+        pass
+
+    with (
+        contextlib.suppress(SomeError),
+        Droplets(do_api, tag="greetings") as droplets,
+    ):
+        droplets(name="hi", image="bar", size="foo", region="dunno")
+        raise SomeError("Oh no!")
+
+    assert fake_url_opener.do.get_number_of_droplets() == 1
+
+    with (
+        contextlib.suppress(SomeError),
+        Droplets(do_api, tag="greetings") as droplets,
+    ):
+        raise SomeError("Oh no! Again!")
+
+    assert fake_url_opener.do.get_number_of_droplets() == 1

@@ -2,6 +2,7 @@ import abc
 import enum
 import logging
 import pprint
+import re
 import time
 from dataclasses import dataclass
 
@@ -44,6 +45,8 @@ class Resource(abc.ABC):
     def _get_default_logger(self):
         logger = logging.getLogger(type(self).__name__)
         handler = logging.StreamHandler()
+        formatter = logging.Formatter("%(name)s: %(message)s")
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
         return logger
@@ -51,16 +54,22 @@ class Resource(abc.ABC):
     def __enter__(self):
         existing_resources = self._get_existing_resources()
         self._logger.info(
-                "Existing:\n%s",
+                "Existing:\n%s\n",
                 self._format_existing_resources(existing_resources),
         )
         self._remaining_existing_resources = existing_resources
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is not None:
+            self._logger.error(
+                "An error occurred, not deleting resources:\n%s\n",
+                exc_value,
+            )
+            return
         existing_resources = self._remaining_existing_resources
         self._logger.info(
-                "Deleting:\n%s",
+                "Deleting:\n%s\n",
                 self._format_existing_resources(existing_resources),
         )
         self._delete_resources(existing_resources)
@@ -78,12 +87,12 @@ class Resource(abc.ABC):
                 categorized.remaining_existing_resources_specs)
 
         if isinstance(categorized, ExistingResource):
-            self._logger.info("Already exists...")
+            self._logger.info("Already exists...\n")
             return categorized.spec
 
-        self._logger.info("Creating...")
+        self._logger.info("Creating...\n")
         created = self._create_resource(**categorized.creation_spec)
-        self._logger.info("Created")
+        self._logger.info("Created\n")
         return created
 
     def _categorize(self, *, required_resource_spec, existing_resources_specs):
@@ -131,6 +140,13 @@ class Resource(abc.ABC):
     @abc.abstractmethod
     def _delete_resources(self, resources, /):
         pass
+
+
+def _delete_by_resources_by_id(self, resources, /):
+    for spec in resources:
+        endpoint = f"{self._ENDPOINT}/{spec['id']}"
+        response = self._do_api.delete(endpoint=endpoint)
+        assert response.code == HTTPCode.NO_CONTENT
 
 
 class Droplets(Resource):
@@ -201,13 +217,10 @@ class Droplets(Resource):
         required["image"] = dict(slug=required.pop("image"))
         required["size_slug"] = required.pop("size")
         required["region"] = dict(slug=required.pop("region"))
+        required.pop("ssh_keys", None)
         return _is_dict_subset(sub=required, super_=existing_resource_spec)
 
-    def _delete_resources(self, specs, /):
-        for spec in specs:
-            endpoint = f"{self._ENDPOINT}/{spec['id']}"
-            response = self._do_api.delete(endpoint=endpoint)
-            assert response.code == HTTPCode.NO_CONTENT
+    _delete_resources = _delete_by_resources_by_id
 
     def _format_existing_resources(self, specs):
         return pprint.pformat([
@@ -222,7 +235,7 @@ class Droplets(Resource):
         ])
 
 
-class VPCs(Resource):
+class Vpcs(Resource):
     _ENDPOINT = "vpcs"
 
     def _get_existing_resources(self):
@@ -244,12 +257,10 @@ class VPCs(Resource):
             sub=required_resource_spec, super_=existing_resource_spec)
 
     def _delete_resources(self, resources, /):
-        for spec in resources:
-            if spec["default"]:
-                continue
-            endpoint = f"{self._ENDPOINT}/{spec['id']}"
-            response = self._do_api.delete(endpoint=endpoint)
-            assert response.code == HTTPCode.NO_CONTENT
+        non_default_vpcs = (
+            spec for spec in resources if not spec["default"]
+        )
+        _delete_by_resources_by_id(self, non_default_vpcs)
 
     def _format_existing_resources(self, specs):
         return pprint.pformat([
@@ -271,3 +282,46 @@ def _is_dict_subset(*, sub, super_):
         else v == super_.get(k)
         for k, v in sub.items()
     )
+
+
+class SshKeys(Resource):
+    _ENDPOINT = "account/keys"
+
+    def __init__(self, *args, name_pattern, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._name_pattern = re.compile(name_pattern)
+
+    def _get_existing_resources(self):
+        keys = self._do_api.get(endpoint=self._ENDPOINT).data["ssh_keys"]
+        return [
+            key
+            for key in keys
+            if self._name_pattern.search(key["name"])
+        ]
+
+    def _create_resource(self, *, name, public_key, **other):
+        response = self._do_api.post(
+                endpoint=self._ENDPOINT,
+                name=name,
+                public_key=public_key,
+                **other,
+        )
+        assert response.code == HTTPCode.CREATED, response.code
+        return response.data
+
+    _delete_resources = _delete_by_resources_by_id
+
+    def _are_specs_equal(
+            self, *, required_resource_spec, existing_resource_spec):
+        return _is_dict_subset(
+            sub=required_resource_spec, super_=existing_resource_spec)
+
+    def _format_existing_resources(self, specs):
+        return pprint.pformat([
+            {
+                "name": spec["name"],
+                "id": spec["id"],
+                "fingerprint": spec["fingerprint"],
+            }
+            for spec in specs
+        ])
